@@ -1,0 +1,7 @@
+# SECRETS (NEVER UPLOAD THESE)
+.env
+user_secrets.json
+__pycache__/
+*.pyc
+*.ogg
+*.png

@@ -1,0 +1,8 @@
+aiogram
+google-generativeai
+python-dotenv
+openai
+requests
+google-genai
+Pillow
+linkedin-api
