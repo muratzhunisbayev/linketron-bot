@@ -14,7 +14,7 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
 genai.configure(api_key=GEMINI_API_KEY)
 # Using Flash for speed on the "Angle Generation"
-model = genai.GenerativeModel('gemini-2.0-flash-exp') 
+model = genai.GenerativeModel('gemini-2.5-flash') 
 
 # --- 1. DEFINITIONS ---
 BUCKET_DEFINITIONS = {

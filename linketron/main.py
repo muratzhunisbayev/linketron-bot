@@ -14,7 +14,6 @@ import requests
 load_dotenv()
 
 # 2. IMPORTS
-from services.auth_agent import launch_browser_login
 from services.researcher import search_perplexity, format_card_text 
 from services.voice_processor import process_voice_note
 from services.image_finder import get_image_from_web
@@ -81,7 +80,8 @@ def get_lens_menu():
 
 def get_login_menu():
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🚀 Auto-Connect (Opens Browser)", callback_data="auto_connect")]
+        # [InlineKeyboardButton(text="🚀 Auto-Connect", callback_data="auto_connect")] <--- DELETE or COMMENT OUT
+        [InlineKeyboardButton(text="🔒 Login via Admin Console", callback_data="none")] # Placeholder
     ])
 
 def get_publish_menu():
@@ -434,24 +434,6 @@ async def process_cancel(callback: types.CallbackQuery, state: FSMContext):
     await callback.message.edit_reply_markup(reply_markup=None)
     await callback.message.answer("✅ **Action Cancelled.**")
     await state.clear()
-
-# --- AUTH HANDLERS ---
-@dp.callback_query(F.data == "auto_connect")
-async def start_auto_login(callback: types.CallbackQuery):
-    user_id = callback.from_user.id
-    await callback.answer()
-    status_msg = await callback.message.edit_text("⏳ **Initializing Browser...**")
-    cookie = await launch_browser_login()
-    if cookie:
-        save_user_secret(user_id, cookie)
-        await status_msg.edit_text(
-            "✅ **Login Verified!**\n\n"
-            "👇 **How do you want to create today?**",
-            reply_markup=get_root_menu(), 
-            parse_mode="Markdown"
-        )
-    else:
-        await status_msg.edit_text("❌ **Login Failed.**", reply_markup=get_login_menu())
 
 @dp.callback_query(F.data == "logout")
 async def logout(callback: types.CallbackQuery):

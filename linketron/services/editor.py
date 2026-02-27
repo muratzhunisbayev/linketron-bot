@@ -78,7 +78,7 @@ def generate_viral_post(research_json, user_transcript):
         clean_transcript = user_transcript if user_transcript else "No specific opinion given. Focus on the facts."
         
         # 2. Select Model (Gemini 2.0 Flash is fast and smart enough for this)
-        model = genai.GenerativeModel('gemini-2.0-flash-exp')
+        model = genai.GenerativeModel('gemini-3-flash-preview')
         
         # 3. Call the API
         response = model.generate_content(
