@@ -90,6 +90,13 @@ def get_publish_menu():
         [InlineKeyboardButton(text="❌ Done (Cancel)", callback_data="action_cancel")]
     ])
 
+def get_language_menu(mode):
+    """Simple toggle for English/Russian before starting the session."""
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🇬🇧 English", callback_data=f"lang_en_{mode}"),
+         InlineKeyboardButton(text="🇷🇺 Russian", callback_data=f"lang_ru_{mode}")]
+    ])
+
 # --- 3. HANDLERS ---
 
 @dp.message(Command("start"))
@@ -127,15 +134,18 @@ async def enter_generator_mode(callback: types.CallbackQuery, state: FSMContext)
 @dp.callback_query(F.data == "mode_story")
 async def enter_story_mode(callback: types.CallbackQuery, state: FSMContext):
     await callback.answer()
+    # Instead of going straight to voice, ask for language first
+    await callback.message.edit_text("🌐 **Choose output language:**", reply_markup=get_language_menu("story"))
+
+@dp.callback_query(F.data.startswith("lang_"))
+async def start_capture(callback: types.CallbackQuery, state: FSMContext):
+    # Extract language and mode from the callback (e.g., lang_en_story)
+    _, lang_code, mode = callback.data.split("_")
+    language = "English" if lang_code == "en" else "Russian"
+    await state.update_data(language=language)
+    
     await state.set_state(BotState.waiting_for_voice)
-    await callback.message.edit_text(
-        "🎙️ **Story Mode Active**\n\n"
-        "👇 **Record a Voice Note** (English or Russian).\n"
-        "I will transcribe it and structure it into a post.",
-        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="🔙 Back", callback_data="back_to_root")]
-        ])
-    )
+    await callback.message.edit_text(f"🎙️ **{language} Story Mode Active**\nSend your voice note.")
 
 @dp.callback_query(F.data == "back_to_root")
 async def back_to_root(callback: types.CallbackQuery, state: FSMContext):
@@ -238,17 +248,19 @@ async def process_voice_message(message: types.Message, state: FSMContext):
     file_path = f"voice_{file_id}.ogg"
     await bot.download_file(file.file_path, file_path)
     
-    # 5. Check Context for Generator Mode
+# 5. Check Context & Language (FIXED)
     state_data = await state.get_data()
+    language = state_data.get("language", "English") # Retrieve the choice from state
     research_context = None
 
     if current_state == BotState.waiting_for_reaction:
         research_context = state_data.get("research_context")
     
-    # 6. Run Processing
+    # 6. Run Processing (FIXED: Added 'language' argument)
     loop = asyncio.get_event_loop()
     try:
-        post_data = await loop.run_in_executor(None, process_voice_note, file_path, research_context)
+        # Pass language here so the logic knows what prompt to use
+        post_data = await loop.run_in_executor(None, process_voice_note, file_path, language, research_context)
     except Exception as e:
         await status_msg.edit_text(f"❌ **System Error:** {str(e)}")
         if os.path.exists(file_path): os.remove(file_path)
