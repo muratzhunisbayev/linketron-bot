@@ -7,86 +7,80 @@ from dotenv import load_dotenv
 load_dotenv()
 genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
 
+
 REFINE_PROMPT = """
 ### ROLE
-You are a Mature Professional. You write with clarity, integrity, and a human touch. You are direct but not robotic.
+You are an uncompromising technical proofreader. Your task is not to rewrite the text, but to "sterilize" it from any signs of artificial intelligence.
 
 ### OBJECTIVE
-Rewrite the input text into a polished LinkedIn post. Maintain the first-person perspective ("I") and preserve the human element of the story.
+Edit the incoming text while maintaining the original structure, sequence of thoughts, and author's style. Intervention should be minimal: only grammar correction, removal of filler words, and replacement of prohibited constructions.
 
 ### CRITICAL RULES
-1. **PRESERVE EXPRESSED EMOTION**: If the user explicitly mentions a feeling (e.g., "I was worried," "I felt relieved," "I am proud"), KEEP IT. Do not strip out the human experience.
-2. **NO MANUFACTURED DRAMA**: Do not add theatricality that wasn't in the original transcript. Avoid "battlefields," "chaos," or "shattered dreams" unless the user used those exact words.
-3. **NOUN PRESERVATION**: Keep specific physical details (terminal, coffee cups, server logs, Astana).
-4. **NO COMPARATIVE SLOP**: Do not use "more than," "less than," or "not X but Y." State facts and feelings directly. 
-   - Bad: "This is more than just code."
-   - Good: "This code represents months of technical work."
-5. **NO HYPHENS OR DASHES**: Construct full sentences with proper verbs and periods. No robotic fragments.
-6. **NO AI-SLOP**: Strictly ban "unlock," "tapestry," "delve," "humbled," or "game-changer."
+1. **MINIMAL INTERVENTION**: Preserve the author's original phrases. If a thought is expressed clearly, do not touch it. DO NOT REWRITE the post from scratch.
+2. **REPLACE DASHES WITH VERBS**: The use of dashes (—) is prohibited. Wherever the author used a dash to connect thoughts, replace it with a suitable verb (is, means, consists of, allows). This makes the text more mature.
+3. **COMPLEX PROSE**: If sentences are too simple or "choppy," combine them using participial phrases or connectors (consequently, which confirms, provided that) so that the text sounds professional, not like a shopping list.
+4. **NO AI SLOP**: Ruthlessly remove and replace words: "unlock," "potential," "journey," "transformation," "dive," "unique," "key to success."
+5. **NO COMPARISONS AND NEGATIONS**: Remove structures like "not X, but Y" or "better than." State facts directly as they are.
+6. **NO DRAMA**: Remove any attempts by the AI to add pathos (no "battles," "chaos," or "challenges" if they were not in the source).
 
 ### LANGUAGE
-You MUST write the entire output in: {language}.
+You MUST write in the ENGLISH language.
 
-### INPUT TEXT:
+### TEXT TO CLEAN:
 {text_to_clean}
 
 ### OUTPUT FORMAT (JSON ONLY)
 {{
-  "title": "original title",
-  "text": "The refined text here..."
+  "title": "Keep the original title or slightly shorten it",
+  "text": "Cleaned text while preserving the author's voice..."
 }}
 """
-
 REFINE_PROMPT_RU = """
 ### РОЛЬ
+Вы — бескомпромиссный технический корректор. Ваша задача — не переписывать текст, а провести его «стерилизацию» от признаков искусственного интеллекта.
 
 ### ОБЪЕКТИВ
-Перепишите входящий текст в пост для LinkedIn. Просто следуйте правилам ниже.
+Отредактируйте входящий текст, сохраняя оригинальную структуру, последовательность мыслей и авторский стиль. Вмешательство должно быть минимальным: только исправление грамматики, удаление слов-паразитов и замена запрещенных конструкций.
 
 ### КРИТИЧЕСКИЕ ПРАВИЛА
-1. **СЛОЖНАЯ ПРОЗА**: Избегайте рубленых, детских предложений. Используйте деепричастные обороты и сложные связки (поскольку, вследствие чего, в то время как), чтобы текст звучал солидно.
-2. **ЗАМЕНА ТИРЕ ГЛАГОЛАМИ**: Поскольку тире запрещено, используйте полноценные глаголы (является, представляет собой, заключается в, означает). Это сделает речь более живой.
-
-5. **НИКАКОЙ ДРАМЫ**: 
-6. **БЕЗ СРАВНЕНИЙ И ОТРИЦАНИЙ**: Никаких "не Х, а Y" или "лучше, чем". Утверждайте факты прямо. 
-7. **БЕЗ AI-ШТАМПОВ**: Никаких "раскрыть потенциал", "путешествие" или "трансформация".
+1. **МИНИМАЛЬНОЕ ВМЕШАТЕЛЬСТВО**: Сохраняйте оригинальные фразы автора. Если мысль выражена ясно, не трогайте её. НЕ ПЕРЕПИСЫВАЙТЕ пост заново.
+2. **ЗАМЕНА ТИРЕ ГЛАГОЛАМИ**: Использование тире (—) запрещено. Везде, где автор использовал тире для связи мыслей, замените его подходящим глаголом (является, означает, заключается в, позволяет). Это делает текст более зрелым.
+3. **СЛОЖНАЯ ПРОЗА**: Если предложения слишком простые или «рубленые», объедините их, используя деепричастные обороты или связки (вследствие чего, что подтверждает, при условии), чтобы текст звучал солидно, а не как список покупок.
+4. **БЕЗ AI-ШТАМПОВ**: Безжалостно удаляйте и заменяйте слова: «раскрыть», «потенциал», «путешествие», «трансформация», «погрузиться», «уникальный», «ключ к успеху».
+5. **БЕЗ СРАВНЕНИЙ И ОТРИЦАНИЙ**: Удаляйте структуры «не Х, а Y» или «лучше, чем». Утверждайте факты прямо, как они есть.
+6. **БЕЗ ДРАМЫ**: Удаляйте любые попытки ИИ добавить пафоса (никаких «битв», «хаоса» или «вызовов», если их не было в исходнике).
 
 ### ЯЗЫК
 Вы ОБЯЗАНЫ писать на РУССКОМ языке.
 
+### ТЕКСТ ДЛЯ ОЧИСТКИ:
+{text_to_clean}
+
 ### ФОРМАТ ВЫВОДА (JSON ONLY)
 {{
-  "title": "Оригинальный заголовок",
-  "text": "Плотный, глубокий и профессиональный текст поста..."
+  "title": "Оставить оригинальный заголовок или слегка сократить его",
+  "text": "Очищенный текст с сохранением авторского голоса..."
 }}
 """
-
-# def clean_ai_slop(text, language):
-#     """The Final Refinement Layer: Strips drama, comparisons, and hyphens."""
-#     model = genai.GenerativeModel('gemini-3-flash-preview') # Fast and precise for editing
-    
-#     try:
-#         response = model.generate_content(
-#             REFINE_PROMPT.format(text_to_clean=text, language=language),
-#             generation_config={"response_mime_type": "application/json"}
-#         )
-#         return json.loads(response.text.strip())
-#     except Exception as e:
-#         print(f"❌ Refinement Error: {e}")
-#         return {"title": "Refinement Error", "text": text}
- 
-# services/cleaner.py
 
 def clean_ai_slop(text_to_clean, language):
     print(f"🧹 Refinement Layer: Cleaning text in {language}...")
     
+    if not text_to_clean:
+        print("❌ ERROR: clean_ai_slop received NO TEXT to clean!")
+        return {"title": "Error", "text": "No text received for cleaning"}
+    
     # Selection logic based on your main.py language strings
     base_prompt = REFINE_PROMPT_RU if language in ["Russian", "ru"] else REFINE_PROMPT
 
+    formatted_prompt = base_prompt.format(text_to_clean=text_to_clean, language=language)
+    print(f"DEBUG: Final Prompt Start: {formatted_prompt[:200]}...")
+
     try:
+        # Initializing Gemini 3 model as requested
         model = genai.GenerativeModel('gemini-3-flash-preview') 
         response = model.generate_content(
-            base_prompt.format(text_to_clean=text_to_clean, language=language),
+            formatted_prompt,
             generation_config={"response_mime_type": "application/json"}
         )
         

@@ -9,6 +9,9 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.context import FSMContext
 from dotenv import load_dotenv
 import requests
+import urllib.parse
+import requests
+from get_token import CLIENT_ID, CLIENT_SECRET, REDIRECT_URI
 
 # 1. LOAD ENV
 load_dotenv()
@@ -30,6 +33,7 @@ dp = Dispatcher()
 
 # --- STATE MACHINE ---
 class BotState(StatesGroup):
+    waiting_for_auth_code = State()
     waiting_for_voice = State()        # Standard Story Mode
     waiting_for_reaction = State()     # Waiting for reaction to Research
     waiting_for_custom_topic = State()
@@ -43,12 +47,16 @@ def load_all_secrets():
         with open(DATA_FILE, "r") as f: return json.load(f)
     except: return {}
 
-def save_user_secret(user_id, cookie_value):
+def save_user_credentials(user_id, token, urn): # Renamed for clarity
     data = load_all_secrets()
-    data[str(user_id)] = cookie_value
-    with open(DATA_FILE, "w") as f: json.dump(data, f, indent=2)
+    data[str(user_id)] = {
+        "access_token": token,
+        "user_urn": urn
+    }
+    with open(DATA_FILE, "w") as f:
+        json.dump(data, f, indent=2)
 
-def get_user_secret(user_id):
+def get_user_credentials(user_id): # Renamed for clarity
     return load_all_secrets().get(str(user_id))
 
 def delete_user_secret(user_id):
@@ -81,7 +89,7 @@ def get_lens_menu():
 def get_login_menu():
     return InlineKeyboardMarkup(inline_keyboard=[
         # [InlineKeyboardButton(text="🚀 Auto-Connect", callback_data="auto_connect")] <--- DELETE or COMMENT OUT
-        [InlineKeyboardButton(text="🔒 Login via Admin Console", callback_data="none")] # Placeholder
+        [InlineKeyboardButton(text="🔒 Login via Admin Console", callback_data="start_login")] # Placeholder
     ])
 
 def get_publish_menu():
@@ -103,9 +111,12 @@ def get_language_menu(mode):
 async def start_command(message: types.Message, state: FSMContext):
     await state.clear()
     user_id = message.from_user.id
-    cookie = get_user_secret(user_id)
     
-    if cookie:
+    # CHANGE THIS LINE:
+    creds = get_user_credentials(user_id) 
+    
+    # Update the logic to check for the new credentials dictionary
+    if creds and creds.get("access_token"): 
         await message.answer(
             "✅ **System Online.** Welcome back!\n\n"
             "👇 **How do you want to create today?**\n\n"
@@ -155,6 +166,88 @@ async def back_to_root(callback: types.CallbackQuery, state: FSMContext):
         "👇 **How do you want to create today?**",
         reply_markup=get_root_menu()
     )
+
+# --- NEW LOGIN & OAUTH HANDLERS ---
+
+@dp.callback_query(F.data == "start_login")
+async def handle_login_request(callback: types.CallbackQuery, state: FSMContext):
+    """Generates the LinkedIn Auth URL and sends it to the user."""
+    auth_url = "https://www.linkedin.com/oauth/v2/authorization"
+    params = {
+        "response_type": "code",
+        "client_id": CLIENT_ID,
+        "redirect_uri": REDIRECT_URI,
+        "scope": "openid profile w_member_social email",
+    }
+    url = f"{auth_url}?{urllib.parse.urlencode(params)}"
+    
+    await callback.message.edit_text(
+        "🔐 **LinkedIn Connection**\n\n"
+        "1. [Click here to Authorize](" + url + ")\n"
+        "2. Login and click 'Allow'.\n"
+        "3. You'll be sent to a Google page. **Copy the code** from the URL bar.\n\n"
+        "👇 **Paste that code here:**",
+        parse_mode="Markdown",
+        disable_web_page_preview=True
+    )
+    await state.set_state(BotState.waiting_for_auth_code)
+
+@dp.message(BotState.waiting_for_auth_code)
+async def process_auth_code(message: types.Message, state: FSMContext):
+    """Exchanges the code for a real token and saves it to the vault."""
+    raw_input = message.text.strip()
+    
+    # 1. ROBUST EXTRACTION: Automatically find the code in a full URL or raw string
+    if "code=" in raw_input:
+        try:
+            # Extracts everything between 'code=' and the next '&'
+            auth_code = raw_input.split("code=")[1].split("&")[0]
+        except IndexError:
+            auth_code = raw_input 
+    else:
+        # Just in case there's browser junk like &zx=... at the end of a raw code
+        auth_code = raw_input.split("&")[0]
+
+    status_msg = await message.answer(f"⏳ Verifying code with LinkedIn...")
+    
+    token_url = "https://www.linkedin.com/oauth/v2/accessToken"
+    data = {
+        "grant_type": "authorization_code",
+        "code": auth_code,
+        "redirect_uri": REDIRECT_URI, # Imported from get_token.py
+        "client_id": CLIENT_ID,     # Imported from get_token.py
+        "client_secret": CLIENT_SECRET, # Imported from get_token.py
+    }
+    
+    try:
+        # 2. EXCHANGE CODE FOR TOKEN
+        response = requests.post(token_url, data=data)
+        if response.status_code == 200:
+            token = response.json().get("access_token")
+            
+            # 3. FETCH USER URN (Required for posting)
+            headers = {"Authorization": f"Bearer {token}"}
+            user_response = requests.get("https://api.linkedin.com/v2/userinfo", headers=headers)
+            
+            if user_response.status_code == 200:
+                user_info = user_response.json()
+                urn = user_info.get("sub")
+                
+                # 4. SAVE TO VAULT (User-specific storage)
+                save_user_credentials(message.from_user.id, token, urn)
+                
+                await status_msg.edit_text(
+                    "✅ **LinkedIn Connected!**\nYour account is now linked to this bot.", 
+                    reply_markup=get_root_menu()
+                )
+                await state.clear()
+            else:
+                await status_msg.edit_text("❌ Could not retrieve your User ID from LinkedIn.")
+        else:
+            await status_msg.edit_text(f"❌ **LinkedIn Error:** {response.text}")
+            
+    except Exception as e:
+        await status_msg.edit_text(f"⚠️ **System Error:** {str(e)}")
 
 # --- B. LENS CLICK HANDLER ---
 @dp.callback_query(F.data.startswith("lens_"))
@@ -422,23 +515,48 @@ async def process_user_photo(message: types.Message, state: FSMContext):
 
 @dp.callback_query(F.data == "action_publish")
 async def process_publish(callback: types.CallbackQuery, state: FSMContext):
-    await callback.answer()
-    status_msg = await callback.message.answer("⏳ **Connecting to LinkedIn...**")
+    """Достает токены пользователя и отправляет пост в LinkedIn."""
+    
+    # 1. Получаем ID пользователя Telegram
+    user_id = callback.from_user.id
+    
+    # 2. Достаем его личные учетные данные из нашего "сейфа"
+    creds = get_user_credentials(user_id)
+    
+    if not creds:
+        await callback.message.answer("❌ Ошибка: Ваши данные не найдены. Пожалуйста, авторизуйтесь снова через /start.")
+        return
 
+    status_msg = await callback.message.answer("⏳ **Публикация в LinkedIn...**")
+    
+    # 3. Собираем данные поста из состояния бота
     data = await state.get_data()
     draft_post = data.get("final_post")
+    
+    # Проверяем наличие сгенерированного изображения
     image_path = "temp_generated_image.png" if os.path.exists("temp_generated_image.png") else None
     
-    loop = asyncio.get_event_loop()
-    result_text = await loop.run_in_executor(
-        None, publish_to_linkedin, draft_post['text'], image_path
-    )
-    
-    await status_msg.edit_text(result_text)
-    if image_path:
-        try: os.remove(image_path)
-        except: pass
-    await state.clear()
+    try:
+        # 4. Запускаем публикацию, передавая токен и URN именно этого пользователя
+        loop = asyncio.get_event_loop()
+        result_text = await loop.run_in_executor(
+            None, 
+            publish_to_linkedin, 
+            draft_post['text'], 
+            image_path,
+            creds['access_token'], # Токен пользователя
+            creds['user_urn']     # URN пользователя
+        )
+        
+        await status_msg.edit_text(result_text)
+        
+        # Очистка временных файлов после публикации
+        if image_path and os.path.exists(image_path):
+            os.remove(image_path)
+            
+    except Exception as e:
+        await status_msg.edit_text(f"⚠️ Ошибка при публикации: {str(e)}")
+        
 
 @dp.callback_query(F.data == "action_cancel")
 async def process_cancel(callback: types.CallbackQuery, state: FSMContext):

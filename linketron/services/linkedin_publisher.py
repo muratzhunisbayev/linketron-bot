@@ -5,20 +5,19 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# Load the Official Keys
-ACCESS_TOKEN = os.getenv("LINKEDIN_ACCESS_TOKEN")
-USER_URN = os.getenv("LINKEDIN_USER_URN")
+# REMOVED: Global ACCESS_TOKEN and USER_URN variables as they are now user-specific
 
-def get_headers():
+def get_headers(token):
+    """Generates headers using the specific user's token."""
     return {
-        "Authorization": f"Bearer {ACCESS_TOKEN}",
+        "Authorization": f"Bearer {token}",
         "Content-Type": "application/json",
         "X-Restli-Protocol-Version": "2.0.0"
     }
 
-def register_upload():
+def register_upload(token, urn):
     """
-    Step 1: Ask LinkedIn for permission to upload an image.
+    Step 1: Ask LinkedIn for permission to upload an image using user-specific credentials.
     Returns: upload_url (where to send bytes) and asset_urn (the ID of the image).
     """
     url = "https://api.linkedin.com/v2/assets?action=registerUpload"
@@ -26,7 +25,7 @@ def register_upload():
     payload = {
         "registerUploadRequest": {
             "recipes": ["urn:li:digitalmediaRecipe:feedshare-image"],
-            "owner": f"urn:li:person:{USER_URN}",
+            "owner": f"urn:li:person:{urn}",
             "serviceRelationships": [{
                 "relationshipType": "OWNER",
                 "identifier": "urn:li:userGeneratedContent"
@@ -34,7 +33,7 @@ def register_upload():
         }
     }
     
-    response = requests.post(url, headers=get_headers(), json=payload)
+    response = requests.post(url, headers=get_headers(token), json=payload)
     
     if response.status_code != 200:
         raise Exception(f"Register Upload Failed: {response.text}")
@@ -44,14 +43,15 @@ def register_upload():
     asset = data['value']['asset']
     return upload_url, asset
 
-def publish_to_linkedin(text, image_path=None):
+def publish_to_linkedin(text, image_path, token, urn):
     """
     The Official Way:
     1. If Image: Register -> Upload -> Post with Media
     2. If Text: Post Text Only
+    Uses token and urn provided for the specific user.
     """
-    if not ACCESS_TOKEN or not USER_URN:
-        return "❌ Error: Missing LINKEDIN_ACCESS_TOKEN or USER_URN in .env"
+    if not token or not urn:
+        return "❌ Error: Missing authentication for this user."
 
     try:
         media_category = "NONE"
@@ -61,13 +61,13 @@ def publish_to_linkedin(text, image_path=None):
         if image_path:
             print(f"📤 Starting Official Image Upload...")
             
-            # 1. Register
-            upload_url, asset_urn = register_upload()
+            # 1. Register with user credentials
+            upload_url, asset_urn = register_upload(token, urn)
             
             # 2. Upload Bytes
             with open(image_path, "rb") as f:
-                # Note: We strip the content-type header for the binary upload to avoid errors
-                headers_upload = {"Authorization": f"Bearer {ACCESS_TOKEN}"}
+                # Use user's token for binary upload authorization
+                headers_upload = {"Authorization": f"Bearer {token}"}
                 requests.put(upload_url, headers=headers_upload, data=f)
             
             # 3. Prepare Post Data
@@ -83,7 +83,7 @@ def publish_to_linkedin(text, image_path=None):
         post_url = "https://api.linkedin.com/v2/ugcPosts"
         
         payload = {
-            "author": f"urn:li:person:{USER_URN}",
+            "author": f"urn:li:person:{urn}",
             "lifecycleState": "PUBLISHED",
             "specificContent": {
                 "com.linkedin.ugc.ShareContent": {
@@ -98,7 +98,7 @@ def publish_to_linkedin(text, image_path=None):
         }
 
         print("🚀 Sending Post to LinkedIn...")
-        response = requests.post(post_url, headers=get_headers(), json=payload)
+        response = requests.post(post_url, headers=get_headers(token), json=payload)
         
         if response.status_code == 201:
             post_id = response.json().get("id", "Unknown")
