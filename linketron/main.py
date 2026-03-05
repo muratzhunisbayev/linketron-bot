@@ -12,6 +12,7 @@ import requests
 import urllib.parse
 import requests
 from get_token import CLIENT_ID, CLIENT_SECRET, REDIRECT_URI
+from services.voice_processor import process_voice_note, process_text_note
 
 # 1. LOAD ENV
 load_dotenv()
@@ -70,7 +71,7 @@ def delete_user_secret(user_id):
 def get_root_menu():
     """The New Lobby: Choose your path"""
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🎙️ I have a Story (Voice)", callback_data="mode_story")],
+        [InlineKeyboardButton(text="🎙️ I have a Story (Voice or Text)", callback_data="mode_story")],
         [InlineKeyboardButton(text="🧠 I need Ideas (Generator)", callback_data="mode_generator")],
         [InlineKeyboardButton(text="❌ Disconnect", callback_data="logout")]
     ])
@@ -156,7 +157,7 @@ async def start_capture(callback: types.CallbackQuery, state: FSMContext):
     await state.update_data(language=language)
     
     await state.set_state(BotState.waiting_for_voice)
-    await callback.message.edit_text(f"🎙️ **{language} Story Mode Active**\nSend your voice note.")
+    await callback.message.edit_text(f"🎙️ **{language} Story Mode Active**\nSend your voice or text note.")
 
 @dp.callback_query(F.data == "back_to_root")
 async def back_to_root(callback: types.CallbackQuery, state: FSMContext):
@@ -385,6 +386,53 @@ async def process_voice_message(message: types.Message, state: FSMContext):
         "👇 **How should we illustrate this?**",
         reply_markup=keyboard
         # parse_mode="Markdown"  <-- DELETED THIS LINE
+    )
+
+@dp.message(F.text)
+async def process_text_draft_message(message: types.Message, state: FSMContext):
+    current_state = await state.get_state()
+    
+    valid_states = [BotState.waiting_for_voice, BotState.waiting_for_reaction]
+    if current_state not in valid_states:
+        return
+
+    status_msg = await message.reply("✅ **Text draft received.** Processing...", parse_mode="Markdown")
+    
+    state_data = await state.get_data()
+    language = state_data.get("language", "English")
+    research_context = None
+
+    if current_state == BotState.waiting_for_reaction:
+        research_context = state_data.get("research_context")
+    
+    loop = asyncio.get_event_loop()
+    try:
+        post_data = await loop.run_in_executor(None, process_text_note, message.text, language, research_context)
+    except Exception as e:
+        await status_msg.edit_text(f"❌ **System Error:** {str(e)}")
+        return
+    
+    if post_data.get("title") == "Error":
+        await status_msg.edit_text(f"❌ **Writer Error:** {post_data.get('text')}")
+        return
+
+    await state.update_data(final_post=post_data)
+    await state.set_state(BotState.waiting_for_visual_choice)
+    await status_msg.delete()
+    
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🌍 Auto-Web Photo", callback_data="visual_web")],
+        [InlineKeyboardButton(text="🎨 Generate AI (Imagen)", callback_data="visual_ai")],
+        [InlineKeyboardButton(text="📤 Upload Own", callback_data="visual_upload")], 
+        [InlineKeyboardButton(text="⏩ Skip (Text Only)", callback_data="visual_skip")]
+    ])
+
+    await message.answer(
+        f"✅ **Draft Created.**\n"
+        f"Strategy Used: {post_data.get('title')}\n\n"
+        f"{post_data.get('text')}\n\n"
+        "👇 **How should we illustrate this?**",
+        reply_markup=keyboard
     )
 
 # --- F. VISUAL HANDLERS ---

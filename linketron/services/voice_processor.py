@@ -139,3 +139,27 @@ def process_voice_note(file_path, language="English", research_context=None):
         "title": refined_post.get("title") or draft_title,
         "text": refined_post.get("text") or draft_text
     }
+
+def process_text_note(raw_text, language="English", research_context=None):
+    """Processes raw text input directly, bypassing audio transcription."""
+    
+    # 1. Drafting (Branches if research is present)
+    if research_context:
+        initial_draft = generate_viral_post(research_context, raw_text, language)
+    else:
+        initial_draft = generate_essay_draft(raw_text, language)
+
+    # 2. Extract Draft
+    draft_text = initial_draft.get('text') or initial_draft.get('post')
+    draft_title = initial_draft.get('title') or "Professional Insight"
+    
+    if not draft_text:
+        print("DEBUG ALERT: draft_text is EMPTY before cleaner!")
+
+    # 3. Final Refinement (Cleaner)
+    refined_post = clean_ai_slop(draft_text, language)
+    
+    return {
+        "title": refined_post.get("title") or draft_title,
+        "text": refined_post.get("text") or draft_text
+    }
