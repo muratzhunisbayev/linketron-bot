@@ -25,7 +25,7 @@ def transcribe_audio_groq(file_path):
             response = requests.post(url, headers=headers, files=files, data=data)
             if response.status_code != 200: 
                 return f"Groq Error: {response.text}"
-            print(f"The raw voice transcription:\n---------------------------------------------\n{response.json().get("text", "")}")
+            print(f"The raw voice transcription:\n---------------------------------------------\n{response.json().get('text', '')}")
             return response.json().get("text", "")
         except Exception as e:
             return f"Transcribe Exception: {str(e)}"
