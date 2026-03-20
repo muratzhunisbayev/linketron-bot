@@ -1,19 +1,12 @@
 import os
 import json
-import logging
 import google.generativeai as genai
 from dotenv import load_dotenv
 
 load_dotenv()
 
-# Configure Gemini
-api_key = os.getenv("GEMINI_API_KEY")
-if not api_key:
-    logging.error("❌ GEMINI_API_KEY is missing in .env")
-else:
-    genai.configure(api_key=api_key)
+genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
 
-# --- SOPHISTICATED VIRAL PROMPT ---
 WRITER_PROMPT = """
 INPUT RESEARCH DATA (The Facts):
 {research_data}
@@ -54,36 +47,14 @@ STYLE & ANTI-PATTERNS (CRITICAL):
 4. **NO ROBOTIC HYPHENS**: Do not use hyphens to connect ideas. Use full verbs and complete sentences.
 5. **DENSE PARAGRAPHS**: Use traditional 3-5 sentence paragraphs. No one-sentence lines.
 6. **NO AI-SLOP**: Strictly ban: "unlock," "unleash," "dive," "humbled," "thrilled."
-
-1. **NO CONTRASTIVE NEGATION**: Do not use "It is not X, but Y." State facts directly. 
-   - Bad: "This is not about code, it's about people."
-   - Good: "This project focuses on the human element of deployment."
-2. **NO THEATRICAL DRAMA**: Remove all manufactured tension. 
-   - Avoid words like: "chaos," "struggle," "shattered," "panic," or "war."
-   - Focus on: "process," "logistics," "implementation," and "results."
-3. **NO 'BROETRY'**: Use standard, professional paragraphs.
-4. NO "NOT X, BUT Y" STRUCTURES:
-   - Bad: "It is not about the price, but about the value."
-   - Good: "The price is irrelevant. Only value matters."
-5. NO ROBOTIC HYPHENS:
-   - Bad: "The result - a massive increase in sales."
-   - Good: "The result was a massive increase in sales."
-6. NO "LABEL: EXPLANATION" BULLETS:
-   - Bad: "• Specificity: Use exact numbers."
-   - Good: "• Use exact numbers like '503 agencies' instead of generic terms."
-7. BANNED VOCABULARY:
-   - Do not use: "Unlock", "Unleash", "Elevate", "Delve", "Game-changer", "In today's landscape", "Foster", "Harness".
-8. NO PREACHY OUTROS:
-   - Avoid "Remember," or "In conclusion,". Just end with the punchline or question.
+7. **NO PREACHY OUTROS**: Avoid "Remember," or "In conclusion,". Just end with the punchline or question.
 
 OUTPUT FORMAT (JSON ONLY):
 {{
-  "title": "The headline here",
   "text": "The full post body here..."
 }}
 """
 
-# --- RUSSIAN WRITER PROMPT (Зрелый профессионал) ---
 WRITER_PROMPT_RU = """
 ДАННЫЕ ИССЛЕДОВАНИЯ:
 {research_data}
@@ -108,38 +79,30 @@ WRITER_PROMPT_RU = """
 
 ### OUTPUT FORMAT (JSON ONLY):
 {{
-  "title": "Заголовок поста",
   "text": "Полный текст поста..."
 }}
 """
 
 def generate_viral_post(research_json, user_transcript, language):
-    """
-    Выбирает нужный промпт в зависимости от языка и генерирует пост.
-    """
-    print(f"✍️ Editor: Connecting Research + Voice in {language}...")
+    """Generates a post draft by combining research data and user transcript."""
+    print(f"✍️ Research Editor: Connecting Research + Voice in {language}...")
     
     try:
-        # 1. Подготовка данных
         research_text = json.dumps(research_json, indent=2)
         clean_transcript = user_transcript if user_transcript else "Focus on technical facts and professional insight."
         
-        # 2. Выбор промпта (Router)
-        selected_prompt = WRITER_PROMPT_RU if language == "Russian" else WRITER_PROMPT
+        selected_prompt = WRITER_PROMPT_RU if language in ["Russian", "ru"] else WRITER_PROMPT
+        model = genai.GenerativeModel('gemini-3.1-flash-lite-preview')
         
-        # 3. Выбор модели
-        model = genai.GenerativeModel('gemini-2.0-flash')
-        
-        # 4. Вызов API
         response = model.generate_content(
             selected_prompt.format(
                 research_data=research_text, 
-                user_transcript=clean_transcript
+                user_transcript=clean_transcript,
+                language=language
             ),
             generation_config={"response_mime_type": "application/json"}
         )
         
-        # 5. Парсинг ответа
         clean_text = response.text.strip()
         if clean_text.startswith("```json"):
             clean_text = clean_text[7:]
@@ -149,7 +112,7 @@ def generate_viral_post(research_json, user_transcript, language):
         return json.loads(clean_text)
 
     except Exception as e:
-        print(f"❌ Editor Error: {e}")
+        print(f"❌ Research Editor Error: {e}")
         return {
             "title": "Error Generating Post",
             "text": f"An error occurred while writing: {e}"

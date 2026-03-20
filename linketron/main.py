@@ -12,14 +12,18 @@ import requests
 import urllib.parse
 import requests
 from get_token import CLIENT_ID, CLIENT_SECRET, REDIRECT_URI
-from services.voice_processor import process_voice_note, process_text_note
+
 
 # 1. LOAD ENV
 load_dotenv()
 
 # 2. IMPORTS
+# 2. IMPORTS
 from services.researcher import search_perplexity, format_card_text 
-from services.voice_processor import process_voice_note
+from services.voice_processor import transcribe_audio_groq
+from services.editor_story import generate_essay_draft
+from services.editor_research import generate_viral_post
+from services.cleaner import clean_ai_slop
 from services.image_finder import get_image_from_web
 from services.image_generator import generate_ai_image
 from services.linkedin_publisher import publish_to_linkedin 
@@ -27,6 +31,7 @@ from config import LENS_MAPPING
 
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 DATA_FILE = "user_secrets.json"
+upload_locks = {}
 
 logging.basicConfig(level=logging.INFO)
 bot = Bot(token=BOT_TOKEN)
@@ -313,17 +318,12 @@ async def run_briefing_sequence(message_obj, state, lens_key, custom_topic=None)
     )
 
 # --- E. VOICE HANDLER (ROBUST VERSION) ---
-# FIX: Removed the specific state filter so it catches ALL voice notes
+# --- E. VOICE HANDLER (ORCHESTRATED) ---
 @dp.message(F.voice) 
 async def process_voice_message(message: types.Message, state: FSMContext):
-    
-    # 1. DIAGNOSE THE STATE
     current_state = await state.get_state()
-    print(f"🎤 Voice Received. Current State: {current_state}") # Debug print
 
-    # 2. HANDLE "LOST" USERS (Restart Amnesia)
     valid_states = [BotState.waiting_for_voice, BotState.waiting_for_reaction]
-    
     if current_state not in valid_states:
         await message.reply(
             "⚠️ **I received your voice, but I wasn't ready.**\n\n"
@@ -333,37 +333,87 @@ async def process_voice_message(message: types.Message, state: FSMContext):
         )
         return
 
-    # 3. IF VALID, PROCEED NORMALLY
-    status_msg = await message.reply("✅ **Voice received.** Transcribing...", parse_mode="Markdown")
+    status_msg = await message.reply("✅ **Voice received.** Processing...", parse_mode="Markdown")
     
-    # 4. Download Audio
+    # 1. Download Audio
     file_id = message.voice.file_id
     file = await bot.get_file(file_id)
     file_path = f"voice_{file_id}.ogg"
     await bot.download_file(file.file_path, file_path)
     
-# 5. Check Context & Language (FIXED)
+    # 2. Check Context
     state_data = await state.get_data()
-    language = state_data.get("language", "English") # Retrieve the choice from state
-    research_context = None
-
-    if current_state == BotState.waiting_for_reaction:
-        research_context = state_data.get("research_context")
+    language = state_data.get("language", "English")
+    research_context = state_data.get("research_context") if current_state == BotState.waiting_for_reaction else None
     
-    # 6. Run Processing (FIXED: Added 'language' argument)
+    # 3. Execution Pipeline
     loop = asyncio.get_event_loop()
     try:
-        # Pass language here so the logic knows what prompt to use
-        post_data = await loop.run_in_executor(None, process_voice_note, file_path, language, research_context)
+        await status_msg.edit_text("⏳ **Transcribing audio...**")
+        raw_text = await loop.run_in_executor(None, transcribe_audio_groq, file_path)
+        
+        if raw_text.startswith("Error") or raw_text.startswith("Groq Error"):
+            raise Exception(raw_text)
+
+        await status_msg.edit_text("⏳ **Drafting post...**")
+        if research_context:
+            initial_draft = await loop.run_in_executor(None, generate_viral_post, research_context, raw_text, language)
+        else:
+            initial_draft = await loop.run_in_executor(None, generate_essay_draft, raw_text, language)
+
+        draft_text = initial_draft.get('text') or initial_draft.get('post', '')
+        draft_title = initial_draft.get('title') or "Draft"
+
+        # ==========================================
+        # 1. PRINT THE EDITOR'S RAW DRAFT TO TERMINAL
+        # ==========================================
+        print("\n" + "="*40)
+        print(f"📝 VOICE EDITOR OUTPUT:")
+        print(f"Title: {draft_title}")
+        print(f"Text:\n{draft_text}")
+        print("="*40 + "\n")
+
+        # await status_msg.edit_text("⏳ **Refining output...**")
+        # final_post = await loop.run_in_executor(None, clean_ai_slop, draft_text, language)
+        
+        # # ==========================================
+        # # 2. PRINT THE CLEANER'S RESULT TO TERMINAL
+        # # ==========================================
+        # print("\n" + "="*40)
+        # print(f"🧹 VOICE CLEANER OUTPUT:")
+        # print(f"Title: {final_post.get('title')}")
+        # print(f"Text:\n{final_post.get('text')}")
+        # print("="*40 + "\n")
+
+        # post_data = {
+        #     "title": final_post.get("title") or draft_title,
+        #     "text": final_post.get("text") or draft_text
+        # }
+
+        # --- CLEANER SKIPPED ---
+        # await status_msg.edit_text("⏳ **Refining output...**")
+        # final_post = await loop.run_in_executor(None, clean_ai_slop, draft_text, language)
+        # 
+        # print("\n" + "="*40)
+        # print(f"🧹 VOICE CLEANER OUTPUT:")
+        # print(f"Title: {final_post.get('title')}")
+        # print(f"Text:\n{final_post.get('text')}")
+        # print("="*40 + "\n")
+
+        # Bypass final_post and use the raw draft directly
+        post_data = {
+            "title": draft_title,
+            "text": draft_text
+        }
+
     except Exception as e:
         await status_msg.edit_text(f"❌ **System Error:** {str(e)}")
         if os.path.exists(file_path): os.remove(file_path)
         return
     
-    # 7. Cleanup & Success
     if os.path.exists(file_path): os.remove(file_path)
 
-    if post_data.get("title") == "Error":
+    if post_data.get("title") == "Error Generating Post" or post_data.get("title") == "Drafting Error":
         await status_msg.edit_text(f"❌ **Writer Error:** {post_data.get('text')}")
         return
 
@@ -378,14 +428,12 @@ async def process_voice_message(message: types.Message, state: FSMContext):
         [InlineKeyboardButton(text="⏩ Skip (Text Only)", callback_data="visual_skip")]
     ])
 
-    # FIX: Removed parse_mode="Markdown" to prevent crashes from AI symbols (like _ or *)
     await message.answer(
         f"✅ **Draft Created.**\n"
         f"Strategy Used: {post_data.get('title')}\n\n"
         f"{post_data.get('text')}\n\n"
         "👇 **How should we illustrate this?**",
         reply_markup=keyboard
-        # parse_mode="Markdown"  <-- DELETED THIS LINE
     )
 
 @dp.message(F.text)
@@ -400,19 +448,68 @@ async def process_text_draft_message(message: types.Message, state: FSMContext):
     
     state_data = await state.get_data()
     language = state_data.get("language", "English")
-    research_context = None
-
-    if current_state == BotState.waiting_for_reaction:
-        research_context = state_data.get("research_context")
+    research_context = state_data.get("research_context") if current_state == BotState.waiting_for_reaction else None
     
     loop = asyncio.get_event_loop()
     try:
-        post_data = await loop.run_in_executor(None, process_text_note, message.text, language, research_context)
+        raw_text = message.text
+
+        await status_msg.edit_text("⏳ **Drafting post...**")
+        if research_context:
+            initial_draft = await loop.run_in_executor(None, generate_viral_post, research_context, raw_text, language)
+        else:
+            initial_draft = await loop.run_in_executor(None, generate_essay_draft, raw_text, language)
+
+        draft_text = initial_draft.get('text') or initial_draft.get('post', '')
+        draft_title = initial_draft.get('title') or "Draft"
+
+        # ==========================================
+        # 1. PRINT THE EDITOR'S RAW DRAFT TO TERMINAL
+        # ==========================================
+        print("\n" + "="*40)
+        print(f"📝 TEXT EDITOR OUTPUT:")
+        print(f"Title: {draft_title}")
+        print(f"Text:\n{draft_text}")
+        print("="*40 + "\n")
+
+        # await status_msg.edit_text("⏳ **Refining output...**")
+        # final_post = await loop.run_in_executor(None, clean_ai_slop, draft_text, language)
+        
+        # # ==========================================
+        # # 2. PRINT THE CLEANER'S RESULT TO TERMINAL
+        # # ==========================================
+        # print("\n" + "="*40)
+        # print(f"🧹 TEXT CLEANER OUTPUT:")
+        # print(f"Title: {final_post.get('title')}")
+        # print(f"Text:\n{final_post.get('text')}")
+        # print("="*40 + "\n")
+
+        # post_data = {
+        #     "title": final_post.get("title") or draft_title,
+        #     "text": final_post.get("text") or draft_text
+        # }
+
+        # --- CLEANER SKIPPED ---
+        # await status_msg.edit_text("⏳ **Refining output...**")
+        # final_post = await loop.run_in_executor(None, clean_ai_slop, draft_text, language)
+        # 
+        # print("\n" + "="*40)
+        # print(f"🧹 TEXT CLEANER OUTPUT:")
+        # print(f"Title: {final_post.get('title')}")
+        # print(f"Text:\n{final_post.get('text')}")
+        # print("="*40 + "\n")
+
+        # Bypass final_post and use the raw draft directly
+        post_data = {
+            "title": draft_title,
+            "text": draft_text
+        }
+
     except Exception as e:
         await status_msg.edit_text(f"❌ **System Error:** {str(e)}")
         return
     
-    if post_data.get("title") == "Error":
+    if post_data.get("title") == "Error Generating Post" or post_data.get("title") == "Drafting Error":
         await status_msg.edit_text(f"❌ **Writer Error:** {post_data.get('text')}")
         return
 
@@ -448,7 +545,6 @@ async def process_visual_web(callback: types.CallbackQuery, state: FSMContext):
     image_url, query_used = await loop.run_in_executor(None, get_image_from_web, draft_post['text'])
     
     full_text_message = (
-        f"🚀 **{draft_post['title']}**\n\n"
         f"{draft_post['text']}\n\n"
         "-----------------------------\n"
         f"📷 *Image Source:* {query_used}"
@@ -499,7 +595,6 @@ async def process_visual_ai(callback: types.CallbackQuery, state: FSMContext):
     )
     
     full_text_message = (
-        f"🚀 **{draft_post['title']}**\n\n"
         f"{draft_post['text']}\n\n"
         "-----------------------------\n"
         f"🎨 *AI Concept:* {subject_used}"
@@ -523,7 +618,6 @@ async def process_visual_skip(callback: types.CallbackQuery, state: FSMContext):
     draft_post = data.get("final_post")
     
     await callback.message.edit_text(
-        f"🚀 **{draft_post['title']}**\n\n"
         f"{draft_post['text']}\n\n"
         "-----------------------------\n"
         "👇 *Ready to Post.*",
@@ -535,76 +629,134 @@ async def process_visual_skip(callback: types.CallbackQuery, state: FSMContext):
 async def process_visual_upload_click(callback: types.CallbackQuery, state: FSMContext):
     await callback.answer()
     await state.set_state(BotState.waiting_for_user_upload)
-    await callback.message.edit_text(
+    
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="✅ Done Uploading", callback_data="finish_uploading")]
+    ])
+    
+    msg = await callback.message.edit_text(
         "📤 **Upload Mode Active**\n\n"
-        "👇 **Drop your photo here.**\n"
-        "_(Send it as a Photo, not a File)_"
+        "👇 **Send your photos now.**\n"
+        "You can send one or multiple. When finished, click the button below.",
+        reply_markup=keyboard
     )
+    
+    # Save the empty queue AND the ID of this message
+    msg_id = msg.message_id if isinstance(msg, types.Message) else callback.message.message_id
+    await state.update_data(uploaded_photos=[], status_msg_id=msg_id)
 
 @dp.message(BotState.waiting_for_user_upload, F.photo)
 async def process_user_photo(message: types.Message, state: FSMContext):
+    user_id = message.from_user.id
+    
+    # 1. Create a traffic lock for this specific user
+    if user_id not in upload_locks:
+        upload_locks[user_id] = asyncio.Lock()
+        
+    # 2. Force simultaneous photos to wait in line
+    async with upload_locks[user_id]:
+        data = await state.get_data()
+        photo_queue = data.get("uploaded_photos", [])
+        status_msg_id = data.get("status_msg_id")
+        
+        photo = message.photo[-1]
+        file_info = await bot.get_file(photo.file_id)
+        
+        # Use file_id for a truly unique filename
+        local_path = f"temp_upload_{photo.file_id}.png"
+        await bot.download_file(file_info.file_path, local_path)
+        
+        photo_queue.append(local_path)
+        
+        # Delete the old button
+        if status_msg_id:
+            try:
+                await bot.delete_message(chat_id=message.chat.id, message_id=status_msg_id)
+            except Exception:
+                pass
+                
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="✅ Done Uploading", callback_data="finish_uploading")]
+        ])
+        
+        # Send the new button
+        new_msg = await message.answer(
+            f"📸 Received. Total in queue: **{len(photo_queue)}**\n"
+            f"Send more, or click Done.",
+            reply_markup=keyboard,
+            parse_mode="Markdown"
+        )
+        
+        # Save the updated queue and new message ID
+        await state.update_data(uploaded_photos=photo_queue, status_msg_id=new_msg.message_id)
+
+@dp.callback_query(BotState.waiting_for_user_upload, F.data == "finish_uploading")
+async def process_done_uploading(callback: types.CallbackQuery, state: FSMContext):
+    await callback.answer()
     data = await state.get_data()
     draft_post = data.get("final_post")
+    photo_queue = data.get("uploaded_photos", [])
     
-    photo = message.photo[-1]
-    file_info = await bot.get_file(photo.file_id)
-    local_path = "temp_generated_image.png"
-    await bot.download_file(file_info.file_path, local_path)
-    
+    if not photo_queue:
+        await callback.message.answer("⚠️ You haven't uploaded any photos yet. Send a photo or click 'Cancel'.")
+        return
+        
     full_text_message = (
         f"🚀 **{draft_post['title']}**\n\n"
         f"{draft_post['text']}\n\n"
         "-----------------------------\n"
-        "📷 *Image Source:* User Upload"
+        f"📷 *Image Source:* User Upload ({len(photo_queue)} photos queued)"
     )
     
-    await message.answer_photo(photo=photo.file_id)
-    await message.answer(text=full_text_message, parse_mode="Markdown", reply_markup=get_publish_menu())
+    await callback.message.edit_text(
+        text=full_text_message, 
+        parse_mode="Markdown", 
+        reply_markup=get_publish_menu()
+    )
 
 @dp.callback_query(F.data == "action_publish")
 async def process_publish(callback: types.CallbackQuery, state: FSMContext):
-    """Достает токены пользователя и отправляет пост в LinkedIn."""
-    
-    # 1. Получаем ID пользователя Telegram
     user_id = callback.from_user.id
-    
-    # 2. Достаем его личные учетные данные из нашего "сейфа"
     creds = get_user_credentials(user_id)
     
     if not creds:
-        await callback.message.answer("❌ Ошибка: Ваши данные не найдены. Пожалуйста, авторизуйтесь снова через /start.")
+        await callback.message.answer("❌ Error: Credentials not found. Please /start and login again.")
         return
 
-    status_msg = await callback.message.answer("⏳ **Публикация в LinkedIn...**")
+    status_msg = await callback.message.answer("⏳ **Publishing to LinkedIn...**")
     
-    # 3. Собираем данные поста из состояния бота
     data = await state.get_data()
     draft_post = data.get("final_post")
+    photo_queue = data.get("uploaded_photos", [])
     
-    # Проверяем наличие сгенерированного изображения
-    image_path = "temp_generated_image.png" if os.path.exists("temp_generated_image.png") else None
+    # Determine the payload: Queue first, fallback to AI/Web temp image
+    image_paths = []
+    if photo_queue:
+        image_paths = photo_queue
+    elif os.path.exists("temp_generated_image.png"):
+        image_paths = ["temp_generated_image.png"]
     
     try:
-        # 4. Запускаем публикацию, передавая токен и URN именно этого пользователя
         loop = asyncio.get_event_loop()
         result_text = await loop.run_in_executor(
             None, 
             publish_to_linkedin, 
             draft_post['text'], 
-            image_path,
-            creds['access_token'], # Токен пользователя
-            creds['user_urn']     # URN пользователя
+            image_paths,
+            creds['access_token'],
+            creds['user_urn']
         )
         
         await status_msg.edit_text(result_text)
         
-        # Очистка временных файлов после публикации
-        if image_path and os.path.exists(image_path):
-            os.remove(image_path)
-            
+        # Cleanup temporary files
+        for path in image_paths:
+            if os.path.exists(path):
+                os.remove(path)
+                
     except Exception as e:
-        await status_msg.edit_text(f"⚠️ Ошибка при публикации: {str(e)}")
-        
+        await status_msg.edit_text(f"⚠️ Publish Error: {str(e)}")
+
 
 @dp.callback_query(F.data == "action_cancel")
 async def process_cancel(callback: types.CallbackQuery, state: FSMContext):

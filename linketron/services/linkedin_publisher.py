@@ -43,10 +43,10 @@ def register_upload(token, urn):
     asset = data['value']['asset']
     return upload_url, asset
 
-def publish_to_linkedin(text, image_path, token, urn):
+def publish_to_linkedin(text, image_paths, token, urn):
     """
     The Official Way:
-    1. If Image: Register -> Upload -> Post with Media
+    1. If Images: Register -> Upload -> Append to Media array for each file.
     2. If Text: Post Text Only
     Uses token and urn provided for the specific user.
     """
@@ -57,27 +57,34 @@ def publish_to_linkedin(text, image_path, token, urn):
         media_category = "NONE"
         media_content = []
 
-        # --- A. HANDLE IMAGE (3-Step Process) ---
-        if image_path:
-            print(f"📤 Starting Official Image Upload...")
-            
-            # 1. Register with user credentials
-            upload_url, asset_urn = register_upload(token, urn)
-            
-            # 2. Upload Bytes
-            with open(image_path, "rb") as f:
-                # Use user's token for binary upload authorization
-                headers_upload = {"Authorization": f"Bearer {token}"}
-                requests.put(upload_url, headers=headers_upload, data=f)
-            
-            # 3. Prepare Post Data
+        # --- A. HANDLE IMAGES (Multi-File Process) ---
+        if image_paths:
+            # Normalize single strings (from Web/AI) into a list
+            if isinstance(image_paths, str):
+                image_paths = [image_paths]
+
+            print(f"📤 Starting Official Image Upload for {len(image_paths)} file(s)...")
             media_category = "IMAGE"
-            media_content = [{
-                "media": asset_urn,
-                "status": "READY",
-                "title": {"attributes": [], "text": "Image"},
-                "description": {"attributes": [], "text": "Uploaded via Linketron"}
-            }]
+
+            for path in image_paths:
+                if not os.path.exists(path):
+                    continue
+                
+                # 1. Register with user credentials
+                upload_url, asset_urn = register_upload(token, urn)
+                
+                # 2. Upload Bytes
+                with open(path, "rb") as f:
+                    headers_upload = {"Authorization": f"Bearer {token}"}
+                    requests.put(upload_url, headers=headers_upload, data=f)
+                
+                # 3. Append to Media Array
+                media_content.append({
+                    "media": asset_urn,
+                    "status": "READY",
+                    "title": {"attributes": [], "text": "Image"},
+                    "description": {"attributes": [], "text": "Uploaded via Linketron"}
+                })
 
         # --- B. CREATE POST (UGC API) ---
         post_url = "https://api.linkedin.com/v2/ugcPosts"
